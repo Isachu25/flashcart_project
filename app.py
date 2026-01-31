@@ -1,111 +1,140 @@
 import streamlit as st
-import pandas as pd
+import json
 import time
-import uuid
-from datetime import datetime
+import pandas as pd
 
-# Configuración
-st.set_page_config(page_title="FlashCartPro: Polyglot Persistence", layout="wide")
-st.title("⚡ FlashCartPro: Arquitectura Políglota")
-st.markdown("### Redis (Caché/Carrito) + MongoDB (Persistencia/Pedidos)")
+# --- CONFIGURACIÓN DE PÁGINA ---
+st.set_page_config(page_title="Simulador KV + Analítica", layout="wide")
+st.title("⚡ KV Store: Monitor de Infraestructura & RAM")
 
-# --- SIMULACIÓN DE BASES DE DATOS (Backend) ---
+# --- INICIALIZACIÓN DEL ESTADO ---
+if 'kv_store' not in st.session_state:
+    st.session_state.kv_store = {}
 
-# 1. Simulación de Redis (Key-Value Store)
-# En la vida real, esto sería un servidor Redis. Aquí es un diccionario en memoria.
-if 'redis_db' not in st.session_state:
-    st.session_state.redis_db = {}
+# --- LAYOUT PRINCIPAL ---
+col_set, col_get = st.columns(2)
 
-# 2. Simulación de MongoDB (Document Store)
-# En la vida real, esto sería un cluster MongoDB. Aquí es una lista de objetos.
-if 'mongo_db' not in st.session_state:
-    st.session_state.mongo_db = []
-
-# --- INTERFAZ DE USUARIO (Frontend) ---
-
-col1, col2, col3 = st.columns(3)
-
-# COLUMNA 1: Catálogo de Productos (La Tienda)
-with col1:
-    st.subheader("1. Tienda (Catálogo)")
-    st.info("Selecciona productos para enviar a Redis.")
-    
-    products = [
-        {"id": "p1", "name": "Laptop Gamer", "price": 1200},
-        {"id": "p2", "name": "Ratón Inalámbrico", "price": 25},
-        {"id": "p3", "name": "Teclado Mecánico", "price": 80},
-        {"id": "p4", "name": "Monitor 4K", "price": 300}
-    ]
-    
-    for p in products:
-        c1, c2 = st.columns([3, 1])
-        c1.write(f"**{p['name']}** (${p['price']})")
-        if c2.button("➕", key=p['id']):
-            # LÓGICA REDIS: SET key value
-            # Usamos el ID del usuario (simulado) + ID producto como clave
-            user_session = "user_123" 
-            redis_key = f"cart:{user_session}:{p['id']}"
-            
-            # En Redis real: r.set(redis_key, json.dumps(p))
-            st.session_state.redis_db[redis_key] = p
-            st.toast(f"Guardado en Redis: {redis_key}")
-
-# COLUMNA 2: El Carrito (Redis - Key-Value)
-with col2:
-    st.subheader("2. Redis (Carrito en Vivo)")
-    st.warning("Almacenamiento temporal. Alta velocidad. Estructura Clave-Valor.")
-    
-    # Mostrar contenido de Redis
-    if st.session_state.redis_db:
-        st.write("keys (claves) almacenadas:")
-        st.json(st.session_state.redis_db)
+# ==========================================
+# 1. SET (GUARDAR)
+# ==========================================
+with col_set:
+    st.subheader("1. Guardar (SET)")
+    with st.form("set_form"):
+        key_input = st.text_input("🔑 Clave (ID Cliente):", placeholder="cliente_A")
+        # Un JSON más pesado por defecto para que se note en la gráfica
+        default_json = """{
+  "usuario": "Ana",
+  "historial": ["Login", "Compra", "Logout", "Login"],
+  "metadata": "Este es un objeto más pesado para probar la RAM"
+}"""
+        value_input = st.text_area("📦 Valor (JSON):", value=default_json, height=150)
+        submitted = st.form_submit_button("Guardar en RAM")
         
-        # Calcular total
-        total = sum([item['price'] for item in st.session_state.redis_db.values()])
-        st.metric("Total en Carrito", f"${total}")
-        
-        if st.button("🛒 Finalizar Compra (Checkout)", type="primary"):
-            # LÓGICA DE MIGRACIÓN: De Redis a MongoDB
-            
-            # 1. Crear el objeto "Pedido" (Documento)
-            order_doc = {
-                "order_id": str(uuid.uuid4())[:8],
-                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "status": "completed",
-                "items": list(st.session_state.redis_db.values()), # Anidamiento
-                "total_paid": total
-            }
-            
-            # 2. Guardar en MongoDB
-            # En Mongo real: db.orders.insert_one(order_doc)
-            st.session_state.mongo_db.append(order_doc)
-            
-            # 3. Limpiar Redis (El carrito temporal muere)
-            st.session_state.redis_db = {}
-            st.rerun()
-            
-    else:
-        st.write("*El carrito está vacío (Redis keys = 0)*")
+        if submitted and key_input:
+            try:
+                json_obj = json.loads(value_input)
+                st.session_state.kv_store[key_input] = {
+                    'value': json_obj,
+                    'timestamp': time.time()
+                }
+                st.success(f"✅ Guardado: {key_input}")
+            except json.JSONDecodeError:
+                st.error("❌ JSON inválido")
 
-# COLUMNA 3: Historial de Pedidos (MongoDB - Documental)
-with col3:
-    st.subheader("3. MongoDB (Pedidos)")
-    st.success("Almacenamiento persistente. Estructura JSON anidada.")
-    
-    if st.session_state.mongo_db:
-        for order in reversed(st.session_state.mongo_db):
-            with st.expander(f"Pedido #{order['order_id']}"):
-                st.write(f"📅 {order['timestamp']}")
-                st.write(f"💰 Total: ${order['total_paid']}")
-                st.write("**Detalle del Documento JSON:**")
-                st.json(order)
-    else:
-        st.write("*No hay pedidos históricos.*")
+# ==========================================
+# 2. GET (RECUPERAR)
+# ==========================================
+with col_get:
+    st.subheader("2. Leer (GET)")
+    search_key = st.text_input("🔍 Buscar Clave:", placeholder="cliente_A")
+    if st.button("Buscar"):
+        if search_key in st.session_state.kv_store:
+            data = st.session_state.kv_store[search_key]
+            # Validar TTL visual (60s)
+            age = time.time() - data['timestamp']
+            if age > 60:
+                st.error(f"❌ Expirado (hace {age:.1f}s)")
+            else:
+                st.success(f"🚀 Activo ({age:.1f}s antigüedad)")
+                st.json(data['value'])
+        else:
+            st.warning("⚠️ Clave no encontrada")
 
-# --- Explicación Técnica ---
+# ==========================================
+# 3. ANALÍTICA DE INFRAESTRUCTURA (NUEVO)
+# ==========================================
 st.divider()
-with st.expander("ℹ️ Arquitectura: ¿Por qué dos bases de datos?"):
-    st.markdown("""
-    * **Redis (Izquierda/Centro):** Se usa para el carrito porque necesitamos escribir y leer muy rápido cada vez que haces clic. No nos importa si la estructura es simple (Clave-Valor), nos importa la **velocidad**. Si el servidor se reinicia, no es grave perder un carrito.
-    * **MongoDB (Derecha):** Se usa para el pedido final. Aquí necesitamos guardar la historia completa, con objetos anidados (lista de items dentro del pedido). Necesitamos **persistencia** y flexibilidad para análisis futuros.
-    """)
+st.header("📊 Dashboard de Infraestructura (Memoria)")
+
+# Preparación de datos para analítica
+analytics_data = []
+total_ram_usage = 0
+current_time = time.time()
+keys_to_delete = [] # Para el garbage collector
+
+if st.session_state.kv_store:
+    for key, item in st.session_state.kv_store.items():
+        # 1. CÁLCULO DE BYTES (Size of Payload)
+        # Convertimos el objeto a string JSON y medimos sus bytes reales (utf-8)
+        # Esto simula el espacio que ocuparía en disco o red.
+        serialized_data = json.dumps(item['value'])
+        size_in_bytes = len(serialized_data.encode('utf-8'))
+        
+        total_ram_usage += size_in_bytes
+        
+        # Lógica de expiración para la tabla
+        age = current_time - item['timestamp']
+        status = "🔴 Expirado" if age > 60 else "🟢 Activo"
+        if age > 60: keys_to_delete.append(key)
+
+        analytics_data.append({
+            "Clave (ID)": key,
+            "Tamaño (Bytes)": size_in_bytes,
+            "Estado": status,
+            "Antigüedad (s)": round(age, 1)
+        })
+
+    # Creación del DataFrame
+    df_analytics = pd.DataFrame(analytics_data)
+
+    # --- MÉTRICAS Y GRÁFICOS ---
+    
+    # Layout de métricas
+    m1, m2, m3 = st.columns(3)
+    
+    with m1:
+        # 3. MÉTRICA DE PESO TOTAL
+        st.metric(label="💾 Consumo Total RAM", value=f"{total_ram_usage} Bytes")
+    
+    with m2:
+        st.metric(label="🔑 Claves Totales", value=len(analytics_data))
+        
+    with m3:
+        if keys_to_delete:
+            st.metric(label="🗑️ Basura Detectada", value=f"{len(keys_to_delete)} claves", delta="-Limpiar", delta_color="inverse")
+        else:
+            st.metric(label="Estado Salud", value="Óptimo")
+
+    # 2. GRÁFICO DE BARRAS (CONSUMO POR CLIENTE)
+    st.subheader("Top Consumidores de Memoria")
+    # Configuramos el índice para que st.bar_chart use la Clave como eje X
+    chart_data = df_analytics.set_index("Clave (ID)")
+    st.bar_chart(chart_data["Tamaño (Bytes)"])
+
+    # Tabla detallada y Botón de Limpieza
+    c_table, c_clean = st.columns([3, 1])
+    with c_table:
+        st.dataframe(df_analytics, use_container_width=True)
+        
+    with c_clean:
+        st.write("### Mantenimiento")
+        if st.button("🧹 Garbage Collector", type="primary"):
+            for k in keys_to_delete:
+                del st.session_state.kv_store[k]
+            st.toast("Memoria liberada correctamente")
+            time.sleep(1)
+            st.rerun()
+
+else:
+    st.info("💡 La base de datos está vacía. Añade claves arriba para ver las métricas de infraestructura.")
+   
